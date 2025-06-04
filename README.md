@@ -1,13 +1,16 @@
-## split Redis - 6.2.6
+## Split Redis version 6.2.6
 * Author  :   Jakee Zhao
 * Date    :   2025/05
 
-### STRUCT TYPE
-* 2025/05/30 add zmalloc
-* 2025/05/30 add SDS
-* 2025/05/30 add adlist
-* 2025/05/30 add dict
-* 2025/05/30 add skiplist
-* 2025/05/30 add intset
-* 2025/06/03 add ziplist
-* 2025/06/03 add redisObject
+### Data Struct
+* 2025/05/30 add zmalloc        <zmalloc>
+* 2025/05/30 add SDS            <SDS>
+* 2025/05/30 add adlist         <adlist>
+* 2025/05/30 add dict           <dict>
+* 2025/05/30 add skiplist       <skiplist>
+* 2025/05/30 add intset         <intset>
+* 2025/06/03 add ziplist        <ziplist>
+* 2025/06/03 add redisObject    <redisObject>
+
+
+### Implementation of a Single-User Database

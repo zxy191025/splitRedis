@@ -1,6 +1,7 @@
 #include <stdlib.h>
 #include "zmalloc.h"
 #include "dict.h"
+#include "ziplist.h"
 #define ZSKIPLIST_MAXLEVEL 32 /* Should be enough for 2^64 elements */
 #define ZSKIPLIST_P 0.25      /* Skiplist P = 1/4 */
 #define LRU_BITS 24
@@ -28,6 +29,27 @@
 /* ZSETs use a specialized version of Skiplists */
 typedef char *hisds;
 #define sds hisds
+
+/* Input flags. */
+#define ZADD_IN_NONE 0
+#define ZADD_IN_INCR (1<<0)    /* Increment the score instead of setting it. */
+#define ZADD_IN_NX (1<<1)      /* Don't touch elements not already existing. */
+#define ZADD_IN_XX (1<<2)      /* Only touch elements already existing. */
+#define ZADD_IN_GT (1<<3)      /* Only update existing when new scores are higher. */
+#define ZADD_IN_LT (1<<4)      /* Only update existing when new scores are lower. */
+
+/* Output flags. */
+#define ZADD_OUT_NOP (1<<0)     /* Operation not performed because of conditionals.*/
+#define ZADD_OUT_NAN (1<<1)     /* Only touch elements already existing. */
+#define ZADD_OUT_ADDED (1<<2)   /* The element was new and was added. */
+#define ZADD_OUT_UPDATED (1<<3) /* The element already existed, score updated. */
+
+/* The actual Redis Object */
+#define OBJ_STRING 0    /* String object. */
+#define OBJ_LIST 1      /* List object. */
+#define OBJ_SET 2       /* Set object. */
+#define OBJ_ZSET 3      /* Sorted set object. */
+#define OBJ_HASH 4      /* Hash object. */
 typedef struct {
     sds min, max;     /* May be set to shared.(minstring|maxstring) */
     int minex, maxex; /* are min or max exclusive? */
@@ -101,6 +123,38 @@ dictType zsetDictType = {
     NULL,                      /* Note: SDS string shared & freed by skiplist */
     NULL,                      /* val destructor */
     NULL                       /* allow to expand */
+};
+/* Sorted sets data type */
+uint64_t dictSdsHash(const void *key) {
+    return dictGenHashFunction((unsigned char*)key, sdslen((char*)key));
+}
+
+int dictSdsKeyCompare(void *privdata, const void *key1,
+        const void *key2)
+{
+    int l1,l2;
+    DICT_NOTUSED(privdata);
+
+    l1 = sdslen((sds)key1);
+    l2 = sdslen((sds)key2);
+    if (l1 != l2) return 0;
+    return memcmp(key1, key2, l1) == 0;
+}
+void dictSdsDestructor(void *privdata, void *val)
+{
+    DICT_NOTUSED(privdata);
+
+    sdsfree(val);
+}
+/* Hash type hash table (note that small hashes are represented with ziplists) */
+dictType hashDictType = {
+    dictSdsHash,                /* hash function */
+    NULL,                       /* key dup */
+    NULL,                       /* val dup */
+    dictSdsKeyCompare,          /* key compare */
+    dictSdsDestructor,          /* key destructor */
+    dictSdsDestructor,          /* val destructor */
+    NULL                        /* allow to expand */
 };
 
 struct sharedObjectsStruct shared;

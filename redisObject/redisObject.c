@@ -688,3 +688,486 @@ void zsetConvert(robj *zobj, int encoding) {
     }
 }
 
+
+/* Convert the sorted set object into a ziplist if it is not already a ziplist
+ * and if the number of elements and the maximum element size and total elements size
+ * are within the expected ranges. */
+void zsetConvertToZiplistIfNeeded(robj *zobj, size_t maxelelen, size_t totelelen) {
+    if (zobj->encoding == OBJ_ENCODING_ZIPLIST) return;
+    zset *zset = zobj->ptr;
+    /*
+    if (zset->zsl->length <= server.zset_max_ziplist_entries &&
+        maxelelen <= server.zset_max_ziplist_value &&
+        ziplistSafeToAdd(NULL, totelelen))
+    {
+        zsetConvert(zobj,OBJ_ENCODING_ZIPLIST);
+    }    
+    */
+}
+
+/* Return (by reference) the score of the specified member of the sorted set
+ * storing it into *score. If the element does not exist C_ERR is returned
+ * otherwise C_OK is returned and *score is correctly populated.
+ * If 'zobj' or 'member' is NULL, C_ERR is returned. */
+int zsetScore(robj *zobj, sds member, double *score) {
+    if (!zobj || !member) return C_ERR;
+
+    if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
+        if (zzlFind(zobj->ptr, member, score) == NULL) return C_ERR;
+    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        zset *zs = zobj->ptr;
+        dictEntry *de = dictFind(zs->dict, member);
+        if (de == NULL) return C_ERR;
+        *score = *(double*)dictGetVal(de);
+    } else {
+        serverPanic("Unknown sorted set encoding");
+    }
+    return C_OK;
+}
+
+
+/* Add a new element or update the score of an existing element in a sorted
+ * set, regardless of its encoding.
+ *
+ * The set of flags change the command behavior. 
+ *
+ * The input flags are the following:
+ *
+ * ZADD_INCR: Increment the current element score by 'score' instead of updating
+ *            the current element score. If the element does not exist, we
+ *            assume 0 as previous score.
+ * ZADD_NX:   Perform the operation only if the element does not exist.
+ * ZADD_XX:   Perform the operation only if the element already exist.
+ * ZADD_GT:   Perform the operation on existing elements only if the new score is 
+ *            greater than the current score.
+ * ZADD_LT:   Perform the operation on existing elements only if the new score is 
+ *            less than the current score.
+ *
+ * When ZADD_INCR is used, the new score of the element is stored in
+ * '*newscore' if 'newscore' is not NULL.
+ *
+ * The returned flags are the following:
+ *
+ * ZADD_NAN:     The resulting score is not a number.
+ * ZADD_ADDED:   The element was added (not present before the call).
+ * ZADD_UPDATED: The element score was updated.
+ * ZADD_NOP:     No operation was performed because of NX or XX.
+ *
+ * Return value:
+ *
+ * The function returns 1 on success, and sets the appropriate flags
+ * ADDED or UPDATED to signal what happened during the operation (note that
+ * none could be set if we re-added an element using the same score it used
+ * to have, or in the case a zero increment is used).
+ *
+ * The function returns 0 on error, currently only when the increment
+ * produces a NAN condition, or when the 'score' value is NAN since the
+ * start.
+ *
+ * The command as a side effect of adding a new element may convert the sorted
+ * set internal encoding from ziplist to hashtable+skiplist.
+ *
+ * Memory management of 'ele':
+ *
+ * The function does not take ownership of the 'ele' SDS string, but copies
+ * it if needed. */
+int zsetAdd(robj *zobj, double score, sds ele, int in_flags, int *out_flags, double *newscore) {
+    /* Turn options into simple to check vars. */
+    int incr = (in_flags & ZADD_IN_INCR) != 0;
+    int nx = (in_flags & ZADD_IN_NX) != 0;
+    int xx = (in_flags & ZADD_IN_XX) != 0;
+    int gt = (in_flags & ZADD_IN_GT) != 0;
+    int lt = (in_flags & ZADD_IN_LT) != 0;
+    *out_flags = 0; /* We'll return our response flags. */
+    double curscore;
+
+    /* NaN as input is an error regardless of all the other parameters. */
+    if (isnan(score)) {
+        *out_flags = ZADD_OUT_NAN;
+        return 0;
+    }
+
+    /* Update the sorted set according to its encoding. */
+    if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
+        unsigned char *eptr;
+
+        if ((eptr = zzlFind(zobj->ptr,ele,&curscore)) != NULL) {
+            /* NX? Return, same element already exists. */
+            if (nx) {
+                *out_flags |= ZADD_OUT_NOP;
+                return 1;
+            }
+
+            /* Prepare the score for the increment if needed. */
+            if (incr) {
+                score += curscore;
+                if (isnan(score)) {
+                    *out_flags |= ZADD_OUT_NAN;
+                    return 0;
+                }
+            }
+
+            /* GT/LT? Only update if score is greater/less than current. */
+            if ((lt && score >= curscore) || (gt && score <= curscore)) {
+                *out_flags |= ZADD_OUT_NOP;
+                return 1;
+            }
+
+            if (newscore) *newscore = score;
+
+            /* Remove and re-insert when score changed. */
+            if (score != curscore) {
+                zobj->ptr = zzlDelete(zobj->ptr,eptr);
+                zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+                *out_flags |= ZADD_OUT_UPDATED;
+            }
+            return 1;
+        } else if (!xx) {
+            
+            /* check if the element is too large or the list
+             * becomes too long *before* executing zzlInsert. */
+            //delete by zhenjia.zhao
+             /*
+             if (zzlLength(zobj->ptr)+1 > server.zset_max_ziplist_entries ||
+                sdslen(ele) > server.zset_max_ziplist_value ||
+                !ziplistSafeToAdd(zobj->ptr, sdslen(ele)))
+            {
+                zsetConvert(zobj,OBJ_ENCODING_SKIPLIST);
+            } else {
+                zobj->ptr = zzlInsert(zobj->ptr,ele,score);
+                if (newscore) *newscore = score;
+                *out_flags |= ZADD_OUT_ADDED;
+                return 1;
+            } 
+            //end
+            */
+
+        
+        
+        } else {
+            *out_flags |= ZADD_OUT_NOP;
+            return 1;
+        }
+    }
+
+    /* Note that the above block handling ziplist would have either returned or
+     * converted the key to skiplist. */
+    if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        zset *zs = zobj->ptr;
+        zskiplistNode *znode;
+        dictEntry *de;
+
+        de = dictFind(zs->dict,ele);
+        if (de != NULL) {
+            /* NX? Return, same element already exists. */
+            if (nx) {
+                *out_flags |= ZADD_OUT_NOP;
+                return 1;
+            }
+
+            curscore = *(double*)dictGetVal(de);
+
+            /* Prepare the score for the increment if needed. */
+            if (incr) {
+                score += curscore;
+                if (isnan(score)) {
+                    *out_flags |= ZADD_OUT_NAN;
+                    return 0;
+                }
+            }
+
+            /* GT/LT? Only update if score is greater/less than current. */
+            if ((lt && score >= curscore) || (gt && score <= curscore)) {
+                *out_flags |= ZADD_OUT_NOP;
+                return 1;
+            }
+
+            if (newscore) *newscore = score;
+
+            /* Remove and re-insert when score changes. */
+            if (score != curscore) {
+                znode = zslUpdateScore(zs->zsl,curscore,ele,score);
+                /* Note that we did not removed the original element from
+                 * the hash table representing the sorted set, so we just
+                 * update the score. */
+                dictGetVal(de) = &znode->score; /* Update score ptr. */
+                *out_flags |= ZADD_OUT_UPDATED;
+            }
+            return 1;
+        } else if (!xx) {
+            ele = sdsdup(ele);
+            znode = zslInsert(zs->zsl,score,ele);
+            serverAssert(dictAdd(zs->dict,ele,&znode->score) == DICT_OK);
+            *out_flags |= ZADD_OUT_ADDED;
+            if (newscore) *newscore = score;
+            return 1;
+        } else {
+            *out_flags |= ZADD_OUT_NOP;
+            return 1;
+        }
+    } else {
+        serverPanic("Unknown sorted set encoding");
+    }
+    return 0; /* Never reached. */
+}
+
+/* Deletes the element 'ele' from the sorted set encoded as a skiplist+dict,
+ * returning 1 if the element existed and was deleted, 0 otherwise (the
+ * element was not there). It does not resize the dict after deleting the
+ * element. */
+static int zsetRemoveFromSkiplist(zset *zs, sds ele) {
+    dictEntry *de;
+    double score;
+
+    de = dictUnlink(zs->dict,ele);
+    if (de != NULL) {
+        /* Get the score in order to delete from the skiplist later. */
+        score = *(double*)dictGetVal(de);
+
+        /* Delete from the hash table and later from the skiplist.
+         * Note that the order is important: deleting from the skiplist
+         * actually releases the SDS string representing the element,
+         * which is shared between the skiplist and the hash table, so
+         * we need to delete from the skiplist as the final step. */
+        dictFreeUnlinkedEntry(zs->dict,de);
+
+        /* Delete from skiplist. */
+        int retval = zslDelete(zs->zsl,score,ele,NULL);
+        serverAssert(retval);
+
+        return 1;
+    }
+
+    return 0;
+}
+
+/* Delete the element 'ele' from the sorted set, returning 1 if the element
+ * existed and was deleted, 0 otherwise (the element was not there). */
+int zsetDel(robj *zobj, sds ele) {
+    if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
+        unsigned char *eptr;
+
+        if ((eptr = zzlFind(zobj->ptr,ele,NULL)) != NULL) {
+            zobj->ptr = zzlDelete(zobj->ptr,eptr);
+            return 1;
+        }
+    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        zset *zs = zobj->ptr;
+        if (zsetRemoveFromSkiplist(zs, ele)) {
+            if (htNeedsResize(zs->dict)) dictResize(zs->dict);
+            return 1;
+        }
+    } else {
+        serverPanic("Unknown sorted set encoding");
+    }
+    return 0; /* No such element found. */
+}
+
+/* Given a sorted set object returns the 0-based rank of the object or
+ * -1 if the object does not exist.
+ *
+ * For rank we mean the position of the element in the sorted collection
+ * of elements. So the first element has rank 0, the second rank 1, and so
+ * forth up to length-1 elements.
+ *
+ * If 'reverse' is false, the rank is returned considering as first element
+ * the one with the lowest score. Otherwise if 'reverse' is non-zero
+ * the rank is computed considering as element with rank 0 the one with
+ * the highest score. */
+long zsetRank(robj *zobj, sds ele, int reverse) {
+    unsigned long llen;
+    unsigned long rank;
+
+    llen = zsetLength(zobj);
+
+    if (zobj->encoding == OBJ_ENCODING_ZIPLIST) {
+        unsigned char *zl = zobj->ptr;
+        unsigned char *eptr, *sptr;
+
+        eptr = ziplistIndex(zl,0);
+        serverAssert(eptr != NULL);
+        sptr = ziplistNext(zl,eptr);
+        serverAssert(sptr != NULL);
+
+        rank = 1;
+        while(eptr != NULL) {
+            if (ziplistCompare(eptr,(unsigned char*)ele,sdslen(ele)))
+                break;
+            rank++;
+            zzlNext(zl,&eptr,&sptr);
+        }
+
+        if (eptr != NULL) {
+            if (reverse)
+                return llen-rank;
+            else
+                return rank-1;
+        } else {
+            return -1;
+        }
+    } else if (zobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        zset *zs = zobj->ptr;
+        zskiplist *zsl = zs->zsl;
+        dictEntry *de;
+        double score;
+
+        de = dictFind(zs->dict,ele);
+        if (de != NULL) {
+            score = *(double*)dictGetVal(de);
+            rank = zslGetRank(zsl,score,ele);
+            /* Existing elements always have a rank. */
+            serverAssert(rank != 0);
+            if (reverse)
+                return llen-rank;
+            else
+                return rank-1;
+        } else {
+            return -1;
+        }
+    } else {
+        serverPanic("Unknown sorted set encoding");
+    }
+}
+
+/* This is a helper function for the COPY command.
+ * Duplicate a sorted set object, with the guarantee that the returned object
+ * has the same encoding as the original one.
+ *
+ * The resulting object always has refcount set to 1 */
+robj *zsetDup(robj *o) {
+    robj *zobj;
+    zset *zs;
+    zset *new_zs;
+
+    serverAssert(o->type == OBJ_ZSET);
+
+    /* Create a new sorted set object that have the same encoding as the original object's encoding */
+    if (o->encoding == OBJ_ENCODING_ZIPLIST) {
+        unsigned char *zl = o->ptr;
+        size_t sz = ziplistBlobLen(zl);
+        unsigned char *new_zl = zmalloc(sz);
+        memcpy(new_zl, zl, sz);
+        zobj = createObject(OBJ_ZSET, new_zl);
+        zobj->encoding = OBJ_ENCODING_ZIPLIST;
+    } else if (o->encoding == OBJ_ENCODING_SKIPLIST) {
+        zobj = createZsetObject();
+        zs = o->ptr;
+        new_zs = zobj->ptr;
+        dictExpand(new_zs->dict,dictSize(zs->dict));
+        zskiplist *zsl = zs->zsl;
+        zskiplistNode *ln;
+        sds ele;
+        long llen = zsetLength(o);
+
+        /* We copy the skiplist elements from the greatest to the
+         * smallest (that's trivial since the elements are already ordered in
+         * the skiplist): this improves the load process, since the next loaded
+         * element will always be the smaller, so adding to the skiplist
+         * will always immediately stop at the head, making the insertion
+         * O(1) instead of O(log(N)). */
+        ln = zsl->tail;
+        while (llen--) {
+            ele = ln->ele;
+            sds new_ele = sdsdup(ele);
+            zskiplistNode *znode = zslInsert(new_zs->zsl,ln->score,new_ele);
+            dictAdd(new_zs->dict,new_ele,&znode->score);
+            ln = ln->backward;
+        }
+    } else {
+        serverPanic("Unknown sorted set encoding");
+    }
+    return zobj;
+}
+
+/* callback for to check the ziplist doesn't have duplicate recoreds */
+static int _zsetZiplistValidateIntegrity(unsigned char *p, void *userdata) {
+    struct {
+        long count;
+        dict *fields;
+    } *data = userdata;
+
+    /* Even records are field names, add to dict and check that's not a dup */
+    if (((data->count) & 1) == 0) {
+        unsigned char *str;
+        unsigned int slen;
+        long long vll;
+        if (!ziplistGet(p, &str, &slen, &vll))
+            return 0;
+        sds field = str? sdsnewlen(str, slen): sdsfromlonglong(vll);;
+        if (dictAdd(data->fields, field, NULL) != DICT_OK) {
+            /* Duplicate, return an error */
+            sdsfree(field);
+            return 0;
+        }
+    }
+
+    (data->count)++;
+    return 1;
+}
+
+/* Validate the integrity of the data structure.
+ * when `deep` is 0, only the integrity of the header is validated.
+ * when `deep` is 1, we scan all the entries one by one. */
+int zsetZiplistValidateIntegrity(unsigned char *zl, size_t size, int deep) {
+    if (!deep)
+        return ziplistValidateIntegrity(zl, size, 0, NULL, NULL);
+
+    /* Keep track of the field names to locate duplicate ones */
+    struct {
+        long count;
+        dict *fields;
+    } data = {0, dictCreate(&hashDictType, NULL)};
+
+    int ret = ziplistValidateIntegrity(zl, size, 1, _zsetZiplistValidateIntegrity, &data);
+
+    /* make sure we have an even number of records. */
+    if (data.count & 1)
+        ret = 0;
+
+    dictRelease(data.fields);
+    return ret;
+}
+
+/* Create a new sds string from the ziplist entry. */
+//delete zhenjia.zhao
+/*sds zsetSdsFromZiplistEntry(ziplistEntry *e) {
+    return e->sval ? sdsnewlen(e->sval, e->slen) : sdsfromlonglong(e->lval);
+}*/
+
+/* Reply with bulk string from the ziplist entry. */
+//delete by zhenjia.zhao
+/*void zsetReplyFromZiplistEntry(client *c, ziplistEntry *e) {
+    if (e->sval)
+        addReplyBulkCBuffer(c, e->sval, e->slen);
+    else
+        addReplyBulkLongLong(c, e->lval);
+}*/
+
+
+/* Return random element from a non empty zset.
+ * 'key' and 'val' will be set to hold the element.
+ * The memory in `key` is not to be freed or modified by the caller.
+ * 'score' can be NULL in which case it's not extracted. */
+void zsetTypeRandomElement(robj *zsetobj, unsigned long zsetsize, ziplistEntry *key, double *score) {
+    if (zsetobj->encoding == OBJ_ENCODING_SKIPLIST) {
+        zset *zs = zsetobj->ptr;
+        dictEntry *de = dictGetFairRandomKey(zs->dict);
+        sds s = dictGetKey(de);
+        key->sval = (unsigned char*)s;
+        key->slen = sdslen(s);
+        if (score)
+            *score = *(double*)dictGetVal(de);
+    } else if (zsetobj->encoding == OBJ_ENCODING_ZIPLIST) {
+        ziplistEntry val;
+        ziplistRandomPair(zsetobj->ptr, zsetsize, key, &val);
+        if (score) {
+            if (val.sval) {
+                *score = zzlStrtod(val.sval,val.slen);
+            } else {
+                *score = (double)val.lval;
+            }
+        }
+    } else {
+        serverPanic("Unknown zset encoding");
+    }
+}
