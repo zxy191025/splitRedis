@@ -10,4 +10,4 @@
 * 2025/05/30 add skiplist
 * 2025/05/30 add intset
 * 2025/06/03 add ziplist
-
+* 2025/06/03 add redisObject

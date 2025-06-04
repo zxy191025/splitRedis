@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "redisobject.h": "c",
+        "dict.h": "c"
+    }
+}
