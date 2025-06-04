@@ -1,6 +1,0 @@
-{
-    "files.associations": {
-        "util.h": "c",
-        "sds.h": "c"
-    }
-}
