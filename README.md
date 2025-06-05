@@ -2,7 +2,7 @@
 * Author  :   Jakee Zhao
 * Date    :   2025/05
 
-### Data Struct
+### 1.0 Data Struct
 * 2025/05/30 add zmalloc        <zmalloc>
 * 2025/05/30 add SDS            <SDS>
 * 2025/05/30 add adlist         <adlist>
@@ -12,5 +12,10 @@
 * 2025/06/03 add ziplist        <ziplist>
 * 2025/06/03 add redisObject    <redisObject>
 
+### 2.0 Implementation of a Single-User Database
 
-### Implementation of a Single-User Database
+#### 2.1 2025/06/05 add redisIO        
+ * A rio object provides the following methods:
+ *  read: read from stream.
+ *  write: write to stream.
+ *  tell: get the current offset.
