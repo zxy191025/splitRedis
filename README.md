@@ -15,7 +15,10 @@
 ### 2.0 Implementation of a Single-User Database
 
 #### 2.1 2025/06/05 add redisIO        
- * A rio object provides the following methods:
+ *  A rio object provides the following methods:
  *  read: read from stream.
  *  write: write to stream.
  *  tell: get the current offset.
+
+#### 2.2 2025/06/08 add rdb
+ *  RDB persistence method can snapshot and store instance data within a specified time interval (when there are M changes within N seconds), which means full backup.
